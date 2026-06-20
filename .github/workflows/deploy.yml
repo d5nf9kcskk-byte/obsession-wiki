@@ -32,6 +32,11 @@ jobs:
       - run: npm ci
 
       - run: npm run build
+        env:
+          # Set this as a repository variable (Settings → Secrets and variables →
+          # Actions → Variables) to the deployed Cloudflare Worker URL. When unset,
+          # the Ask AI chat shows a "not configured" notice instead of erroring.
+          VITE_AI_PROXY_URL: ${{ vars.VITE_AI_PROXY_URL }}
 
       - uses: actions/configure-pages@v5
 

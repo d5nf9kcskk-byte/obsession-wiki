@@ -28,3 +28,12 @@ pnpm-debug.log*
 # Vite / cache
 .vite/
 *.tsbuildinfo
+
+# Local env files (keep .env.example tracked)
+.env
+.env.*
+!.env.example
+
+# Cloudflare Worker
+.wrangler/
+.dev.vars

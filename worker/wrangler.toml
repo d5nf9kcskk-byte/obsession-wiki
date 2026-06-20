@@ -1,0 +1,20 @@
+name = "obsession-ai-proxy"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+
+[vars]
+# Comma-separated list of allowed browser origins (scheme + host, no trailing slash).
+# This is the GitHub Pages origin that serves the wiki. Add http://localhost:5174
+# while developing the frontend locally, e.g.:
+#   ALLOWED_ORIGIN = "https://d5nf9kcskk-byte.github.io,http://localhost:5174"
+ALLOWED_ORIGIN = "https://d5nf9kcskk-byte.github.io"
+
+# The ANTHROPIC_API_KEY is a SECRET — do NOT put it here. Set it once with:
+#   wrangler secret put ANTHROPIC_API_KEY
+
+# Optional: per-IP rate limiting (30 requests / 60s). Uncomment, then redeploy.
+# [[unsafe.bindings]]
+# name = "RATE_LIMITER"
+# type = "ratelimit"
+# namespace_id = "1001"
+# simple = { limit = 30, period = 60 }
