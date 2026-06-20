@@ -1,74 +1,72 @@
 // ============================================================================
 // PASTE-READY Cloudflare Worker for the Obsession wiki "Ask the Rulebook" chat.
 //
-// This is a plain-JavaScript copy of src/index.ts so you can paste it straight
-// into the Cloudflare dashboard editor (Workers & Pages -> your worker ->
-// "Edit code") with no build step.
+// Plain-JavaScript copy of src/index.ts — paste straight into the Cloudflare
+// dashboard editor (Workers & Pages -> your worker -> "Edit code"), no build step.
+//
+// It keeps your Anthropic key server-side AND feeds the AI the COMPLETE Obsession
+// reference, which it fetches from your deployed wiki (ai-knowledge.txt). So the AI
+// answers from the full wiki content and updates automatically when the wiki rebuilds.
 //
 // After deploying, set these in the worker's Settings -> "Variables and Secrets":
 //   * Secret    ANTHROPIC_API_KEY = your sk-ant-... key   (encrypted)
 //   * Variable  ALLOWED_ORIGIN    = https://d5nf9kcskk-byte.github.io
+//   * Variable  KNOWLEDGE_URL     = https://d5nf9kcskk-byte.github.io/obsession-wiki/ai-knowledge.txt
+//                                   (optional — this is also the built-in default)
 // ============================================================================
 
 const MODEL = 'claude-haiku-4-5-20251001';
-const MAX_TOKENS = 1024;
+const MAX_TOKENS = 1500;
 const MAX_MESSAGES = 30;
 const MAX_CHARS = 8000;
 
-const SYSTEM_PROMPT = `You are an expert rulebook assistant for Obsession, the Victorian board game by Dan Hallagan (Kayenta Games). Answer questions thoroughly and accurately based on these rules:
+const DEFAULT_KNOWLEDGE_URL = 'https://d5nf9kcskk-byte.github.io/obsession-wiki/ai-knowledge.txt';
+const KNOWLEDGE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-SERVANTS (Base game: Butler, Valet, Lady's Maid, Housekeeper, Footman, Underbutler. Upstairs/Downstairs adds: Cook, Hall Boy, Head Housemaid, Useful Man):
+const INSTRUCTIONS = `You are the definitive rules expert for the board game Obsession (designed by Dan Hallagan, Kayenta Games), including all of its expansions. A complete reference document is provided below under "OBSESSION REFERENCE".
 
-SUBSTITUTION RULES:
-- Underbutler can substitute for Butler or Valet
-- Useful Man (U/D expansion) can substitute for any male servant
-- Head Housemaid can substitute for Lady's Maid or Housekeeper
-- Hall Boy can substitute for Footman
+How to answer:
+- Answer the player's question directly and completely using the reference. You ARE the rulebook — NEVER tell the user to "consult the rulebook", "check the manual", "refer to the rules", or figure it out themselves. Just give the answer.
+- Be specific: cite exact tile, card, servant, and family names, plus costs, VP values, reputation requirements, servant/guest requirements, and round numbers.
+- When the FAQ / official clarifications cover the question, follow them.
+- If an exact edge case is not explicitly in the reference, reason from the closest applicable rules and briefly note that it is an interpretation rather than a printed rule.
+- Keep answers focused and well-organized; use short lists when they make the answer clearer.`;
 
-HIRING SERVANTS:
-- On your turn, you may take the "Hire a Servant" action
-- Pay the cost from the market (typically £100-£200)
-- Servants start in the Servant Hall (unemployed)
-- During an activity, servants are assigned from the Servant Hall to the activity tile
-- The Underbutler is a special servant that can stand in for Butler or Valet
+// Minimal correct fallback used only if the full reference can't be fetched.
+const FALLBACK_KNOWLEDGE = `Obsession is a 1–4 player tile-placement/deck game set in 1860s Victorian Derbyshire; over 16 rounds (20 extended) players host activities, invite gentry guests, renovate their estate, and manage servants to score Victory Points.
 
-IMPROVEMENT TILES:
-- Each tile specifies required servant types, guest count/gender, and provides favors
-- Level 1 (front): base favors. Level 2 (back, after upgrading): enhanced favors
-- To host an activity on a tile, you need all required servants available
-- Starting tiles: Private Study (no servant), Butler's Room, Main Gazebo, Front Parlour, Bowling Green
+SERVANTS & SUBSTITUTION: Butler (formal activities; substituted by Underbutler). Valet (male guests; substituted by Underbutler; a Footman may sub with the Brushing Room tile). Lady's Maid (female guests; substituted by Housekeeper). Housekeeper (dining; can sub for Lady's Maid). Footman (outdoor/estate; substituted by Underbutler). Underbutler (subs for Butler, Valet, or Footman). Upstairs/Downstairs adds Cook, Hall Boy (subs for Butler/Footman), Head Housemaid, Useful Man. Servants cool down ~2 rounds after use.
 
-FAMILIES:
-- Asquith: Has Dowager Countess as 5th family member
-- Cavendish: Starts at reputation level 1.4 (bonus reputation points)
-- Ponsonby: Starts with £300 extra
-- York: Starts with an extra Footman
-- Wessex (expansion): Larger estate, choose Morning/Retiring or Breakfast/Tennis
-- Howard (U/D expansion): Servant-focused, starts with extra Cook
+PASS ACTION: retrieve your discard pile, reset all servants to available, and choose EITHER gain £200 OR refresh the Builder's Market; you may also hire servants.
 
-TURN STRUCTURE:
-Each player turn: 1) Choose an action: Host Activity, Hire Servant, Acquire Tile, Refresh Servants, Pass. 2) Take the action. 3) Play passes left.
+SPECIAL ROUNDS (standard/extended): Village Fair (3,9 / 4,9,16) — Private Study holders gain £300 +2 Rep. Courtship (4,8,12,16 / 5,10,15,20) — score VP of tiles matching the revealed theme category; winner takes a Fairchild card (8 VP) and a VP card; tiebreaker is reputation. Builder's Holiday (11 / 13) — buy unlimited tiles. National Holiday (14 / 11) — all reputation/prestige restrictions removed.
 
-HOST ACTIVITY: Choose a tile in your estate, ensure all required servants are available (in Servant Hall), assign them, invite guest(s) matching type requirements, gain the favors listed.
+SCORING: tiles (printed VP), gentry cards (printed VP), objective cards, servants (2 VP each), wealth (1 VP per £200), Courtship VP cards, and reputation (scales up to ~45 VP at level 7).
 
-SPECIAL ROUNDS:
-- Village Fair (round 3, 9 in standard / 4, 9, 16 extended): +£300 and +2 Rep for Private Study holders
-- Courtship (round 4, 8, 12, 16 / 5, 10, 15, 20): VP scored by theme; winner gets Fairchild card
-- Builder's Holiday (round 11 / 13): Buy unlimited tiles this round
-- National Holiday (round 14 / 11): No reputation restrictions this round
+(The full reference could not be loaded; answer from these essentials and general Obsession knowledge, and do not tell the user to consult the rulebook.)`;
 
-GENTRY CARDS:
-- Starter cards: free to invite, no reputation requirement
-- Casual cards: require moderate reputation
-- Prestige cards: require higher reputation
-- Family cards: special family-specific guests
-- Fairchild cards: won through Courtship
+let cachedKnowledge = null;
+let cachedAt = 0;
 
-SCORING: Victory Points from tiles (face value), gentry cards held (VP printed), objective cards, prestige track position, money (£100 = 1 VP).
-
-PASS ACTION: Take £50 and gain 1 reputation. Useful when you cannot afford other actions.
-
-Answer questions based on this ruleset. Be specific about servant types, costs, and requirements. If something depends on expansion ownership, say so. For edge cases not explicitly covered, reason from the spirit of the rules.`;
+async function getKnowledge(env) {
+  const now = Date.now();
+  if (cachedKnowledge && now - cachedAt < KNOWLEDGE_TTL_MS) return cachedKnowledge;
+  const url = env.KNOWLEDGE_URL || DEFAULT_KNOWLEDGE_URL;
+  try {
+    const res = await fetch(url, { cf: { cacheTtl: 3600, cacheEverything: true } });
+    if (res.ok) {
+      const text = await res.text();
+      if (text && text.length > 500) {
+        cachedKnowledge = text;
+        cachedAt = now;
+        return text;
+      }
+    }
+  } catch {
+    // network error — fall back to stale cache or the built-in essentials
+  }
+  return cachedKnowledge || FALLBACK_KNOWLEDGE;
+}
 
 function json(body, status, headers) {
   return new Response(JSON.stringify(body), {
@@ -102,6 +100,12 @@ export default {
     if (origin && !allowList.includes(origin)) return json({ error: 'Origin not allowed' }, 403, cors);
     if (!env.ANTHROPIC_API_KEY) return json({ error: 'Server misconfigured: missing ANTHROPIC_API_KEY' }, 500, cors);
 
+    if (env.RATE_LIMITER) {
+      const ip = request.headers.get('CF-Connecting-IP') || 'anon';
+      const { success } = await env.RATE_LIMITER.limit({ key: ip });
+      if (!success) return json({ error: 'Rate limit exceeded. Please slow down and try again.' }, 429, cors);
+    }
+
     let body;
     try {
       body = await request.json();
@@ -121,6 +125,9 @@ export default {
       messages.push({ role: m.role, content: m.content.slice(0, MAX_CHARS) });
     }
 
+    const knowledge = await getKnowledge(env);
+    const systemPrompt = `${INSTRUCTIONS}\n\n===== OBSESSION REFERENCE =====\n${knowledge}\n===== END REFERENCE =====`;
+
     const upstream = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -128,7 +135,7 @@ export default {
         'x-api-key': env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
       },
-      body: JSON.stringify({ model: MODEL, max_tokens: MAX_TOKENS, system: SYSTEM_PROMPT, messages }),
+      body: JSON.stringify({ model: MODEL, max_tokens: MAX_TOKENS, system: systemPrompt, messages }),
     });
 
     const text = await upstream.text();

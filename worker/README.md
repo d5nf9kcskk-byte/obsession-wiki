@@ -9,6 +9,24 @@ Because the model, system prompt, and `max_tokens` are fixed in
 used to ask Obsession rulebook questions — it is not a general-purpose Claude
 endpoint.
 
+## How the AI knows the rules
+
+The worker feeds the model the **complete Obsession reference** — every rule,
+tile, gentry card, servant, family, component list, and FAQ entry. That reference
+is compiled from the same data that powers the wiki by
+[`scripts/build-knowledge.ts`](../scripts/build-knowledge.ts) into
+`ai-knowledge.txt`, which the site serves at
+`<site>/ai-knowledge.txt`.
+
+The worker **fetches that file at runtime** (cached up to 1 hour) and uses it as
+the system prompt, with instructions to answer directly and never tell the user
+to "go read the rulebook." Because the file is regenerated on every site build,
+**the AI's knowledge updates automatically whenever the wiki content changes** —
+you do not need to redeploy the worker to update its knowledge.
+
+> If you change the worker code itself (this file's logic), you do need to
+> redeploy/re-paste it once. Updating wiki *content* requires only a site rebuild.
+
 ## One-time setup
 
 You need a free [Cloudflare account](https://dash.cloudflare.com/sign-up) and an
@@ -54,6 +72,9 @@ configured" notice instead of erroring.
 
 - **`ALLOWED_ORIGIN`** (in `wrangler.toml`): comma-separated list of browser
   origins allowed to call the Worker. Defaults to the GitHub Pages origin.
+- **`KNOWLEDGE_URL`** (in `wrangler.toml`): URL of the compiled reference the AI
+  reads. Defaults to `<site>/ai-knowledge.txt`; only change it if your wiki is
+  hosted somewhere else.
 - **Rate limiting** (optional): uncomment the `RATE_LIMITER` binding in
   `wrangler.toml` to enable per-IP limiting, then redeploy.
 

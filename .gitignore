@@ -6,6 +6,9 @@ dist/
 dist-ssr/
 *.local
 
+# Generated AI knowledge base (built from src/data by scripts/build-knowledge.ts)
+public/ai-knowledge.txt
+
 # Logs
 logs/
 *.log
